@@ -1,0 +1,166 @@
+/*
+ * CS 261: Main driver
+ *
+ * Name: Jordan Martin
+ */
+
+#include "p1-check.h"
+#include "p2-load.h"
+#include "p3-disas.h"
+#include "p4-interp.h"
+
+int main (int argc, char **argv)
+{
+    //initialize the booleans and filename
+    bool print_header = false;
+    bool segments = false;
+    bool membrief = false;
+    bool memfull = false;
+    bool disas_code = false;
+    bool disas_data = false;
+    bool exec_normal = false;
+    bool exec_trace = false;
+    char *filename = NULL;
+
+    //parse the command line
+    if ((parse_command_line_p4(argc, argv, &print_header, &segments, &membrief, &memfull, &disas_code,
+                               &disas_data, &exec_normal, &exec_trace, &filename)) == false) {
+        exit(EXIT_FAILURE);
+    }
+
+    //check if filename is still null
+    if (filename) {
+
+        //check for dump header
+        FILE *file = fopen(filename, "r");
+        elf_hdr_t header;
+        bool read = read_header(file, &header);
+        if (read && print_header) {
+            dump_header(header);
+            EXIT_SUCCESS;
+        }
+
+        //read headers
+        elf_phdr_t phdr[header.e_num_phdr];
+        for (int i = 0; i < header.e_num_phdr; i++) {
+            if (!read_phdr(file, (header.e_phdr_start + i * sizeof(elf_phdr_t)), &phdr[i])) {
+                printf("Failed to read file\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+
+        //check if segments is true and print headers
+        if (segments) {
+            dump_phdrs(header.e_num_phdr, phdr);
+        }
+
+        //free the memory
+        byte_t *memory = (byte_t*) calloc(MEMSIZE, 1);
+        for (int i = 0; i < header.e_num_phdr; i++) {
+            if (!load_segment(file, memory, phdr[i])) {
+                free(memory);
+            }
+        }
+
+
+        //print memory if -m is true
+        if (memfull) {
+            dump_memory(memory, 0, MEMSIZE);
+        }
+
+        //print memory if -M is true
+        if (membrief) {
+            for (int i = 0; i < header.e_num_phdr; i++) {
+                dump_memory(memory, header.e_phdr_start, header.e_phdr_start + phdr[i].p_filesz);
+            }
+        }
+
+        //disassemble the code
+        if (disas_code) {
+            disassemble_code(memory, phdr, &header);
+        }
+
+
+        //disassemble the data
+        if (disas_data) {
+            disassemble_data(memory, phdr);
+        }
+
+
+        //initialize variables used for -e and -E
+        y86_t cpu;
+        memset(&cpu, 0x00, sizeof(cpu));
+        y86_inst_t inst;
+        y86_reg_t valA = 0;
+        y86_reg_t valE = 0;
+        cpu.stat = AOK;
+        int exeCount = 0;
+        bool cond = false;
+        cpu.pc = header.e_entry;
+
+        //execute the CPU normally
+        if (exec_normal) {
+            printf("Beginning execution at 0x%04x\n", header.e_entry);
+
+            while (cpu.stat == AOK) {
+                inst = fetch(&cpu, memory);
+                cond = false;
+
+                valE = decode_execute(&cpu, inst, &cond, &valA);
+                memory_wb_pc(&cpu, inst, memory, cond, valA, valE);
+                exeCount++;
+
+
+
+
+            }
+            dump_cpu_state(cpu);
+            printf("Total execution count: %d\n", exeCount);
+
+        }
+
+        //execute the CPU tracing through the functions
+        if (exec_trace) {
+            printf("Beginning execution at 0x%04x\n", header.e_entry);
+            dump_cpu_state(cpu);
+
+            while (cpu.stat == AOK) {
+                inst = fetch(&cpu, memory);
+                printf("\nExecuting: ");
+                disassemble(inst);
+                printf("\n");
+
+                cond = true;
+
+                valE = decode_execute(&cpu, inst, &cond, &valA);
+                memory_wb_pc(&cpu, inst, memory, cond, valA, valE);
+                dump_cpu_state(cpu);
+                exeCount++;
+
+
+
+
+            }
+
+            printf("Total execution count: %d\n", exeCount);
+            printf("\n");
+            dump_memory(memory, 0, MEMSIZE);
+
+
+        }
+
+
+        //free the memory
+        free(memory);
+        fclose(file);
+
+
+
+
+
+    }
+
+
+    return EXIT_SUCCESS;
+}
+
